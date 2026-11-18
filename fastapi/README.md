@@ -2,6 +2,8 @@
 
 Deploy your [FastAPI](https://fastapi.tiangolo.com/) project to Vercel with zero configuration.
 
+This project serves a REST API with JSON responses.
+
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/vercel/vercel/tree/main/examples/fastapi&template=fastapi)
 
 _Live Example: https://vercel-plus-fastapi.vercel.app/_
@@ -10,25 +12,26 @@ Visit the [FastAPI documentation](https://fastapi.tiangolo.com/) to learn more.
 
 ## Project Structure
 
-This example follows the [larger applications](https://fastapi.tiangolo.com/tutorial/bigger-applications/) pattern from the FastAPI docs:
+The application is organized by feature. Each feature owns its routes, business logic, and dependencies:
 
 ```
 app/
 ├── __init__.py
 ├── main.py              # FastAPI application entry point
-├── templates/
-│   └── index.html       # Landing page template
-├── api/
+├── router.py            # Feature router assembly
+├── features/
 │   ├── __init__.py
-│   ├── main.py          # API router assembly
-│   ├── deps.py          # Shared dependencies
-│   └── routes/
+│   └── items/
 │       ├── __init__.py
-│       └── items.py     # Item endpoints
+│       ├── router.py    # Item endpoints and HTTP responses
+│       ├── service.py   # Item business logic
+│       └── dependencies.py # Item request dependencies
 └── core/
     ├── __init__.py
     └── config.py        # Application settings
 ```
+
+To add a feature, create a package under `app/features/` and register its router in `app/router.py`. Keep shared application configuration in `app/core/`. Add schemas or persistence modules within each feature when needed.
 
 ## Getting Started
 
@@ -48,7 +51,7 @@ vercel dev
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Landing page |
+| `GET` | `/` | API name and version as JSON |
 | `GET` | `/api/v1/items/` | List sample items |
 | `GET` | `/api/v1/items/{item_id}` | Get item by ID |
 | `GET` | `/docs` | Interactive API docs (Swagger UI) |

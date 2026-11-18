@@ -1,11 +1,7 @@
-from pathlib import Path
+from fastapi import FastAPI
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-
-from app.api.main import api_router
 from app.core.config import settings
+from app.router import api_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -15,12 +11,10 @@ app = FastAPI(
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
 
-templates = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
-
-@app.get("/", response_class=HTMLResponse)
-def read_root(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+@app.get("/")
+def read_root():
+    return {"name": settings.PROJECT_NAME, "version": settings.VERSION}
 
 
 if __name__ == "__main__":

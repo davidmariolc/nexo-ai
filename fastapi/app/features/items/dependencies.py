@@ -2,5 +2,5 @@ from datetime import datetime, timezone
 
 
 def get_timestamp() -> str:
-    """Return the current UTC timestamp in ISO 8601 format."""
+    """Provide the current UTC timestamp for item responses."""
     return datetime.now(timezone.utc).isoformat()
