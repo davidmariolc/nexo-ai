@@ -1,6 +1,16 @@
-# React + TypeScript + Vite
+# Nexo AI · Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and Ultracite.
+Nexo AI is a single-conversation chat built with React, TypeScript and Vite.
+
+## Run the chat locally
+
+Start FastAPI on port `5001` from the `fastapi` directory with its local settings configured.
+
+```sh
+uv run uvicorn app.main:app --port 5001
+```
+
+Then run `pnpm dev` from the `frontend` directory. Vite proxies `/api/v1` to FastAPI in development and preview. Serve that path from the same origin as the frontend in production.
 
 Currently, two official plugins are available:
 
