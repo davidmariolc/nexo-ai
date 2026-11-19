@@ -27,6 +27,9 @@ interface ChatSuccess {
   usage: TokenUsage | null;
 }
 
+export const isChatCommand = (prompt: string) =>
+  prompt === "/reset" || prompt === "/history";
+
 const isChatMessage = (value: unknown): value is ChatMessage =>
   typeof value === "object" &&
   value !== null &&
@@ -35,7 +38,10 @@ const isChatMessage = (value: unknown): value is ChatMessage =>
   "content" in value &&
   typeof value.content === "string";
 
-const isChatResponse = (value: unknown): value is ChatResponse =>
+const isChatResponse = (
+  value: unknown,
+  minimumMessages: number
+): value is ChatResponse =>
   typeof value === "object" &&
   value !== null &&
   "conversation_id" in value &&
@@ -43,7 +49,7 @@ const isChatResponse = (value: unknown): value is ChatResponse =>
   value.conversation_id.length > 0 &&
   "messages" in value &&
   Array.isArray(value.messages) &&
-  value.messages.length >= 2 &&
+  value.messages.length >= minimumMessages &&
   value.messages.every(isChatMessage);
 
 const isTokenCount = (value: unknown): value is number =>
@@ -69,6 +75,7 @@ export const sendChatMessage = async (
   prompt: string,
   conversationId: string | null
 ): Promise<ChatSuccess | ChatFailure> => {
+  const isCommand = isChatCommand(prompt);
   let response: Response;
 
   try {
@@ -95,14 +102,16 @@ export const sendChatMessage = async (
 
   if (!response.ok) {
     return {
-      message: "Nexo no pudo responder. Intenta enviar de nuevo.",
+      message: isCommand
+        ? "No se pudo ejecutar el comando. Intenta enviarlo de nuevo."
+        : "Nexo no pudo responder. Intenta enviar de nuevo.",
       status: "failed",
     };
   }
 
   try {
     const data: unknown = await response.json();
-    if (isChatResponse(data)) {
+    if (isChatResponse(data, isCommand ? 0 : 2)) {
       return {
         id: data.conversation_id,
         messages: data.messages,

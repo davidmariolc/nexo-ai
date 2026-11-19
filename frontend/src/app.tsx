@@ -1,9 +1,9 @@
 import type { KeyboardEvent, SubmitEvent, UIEvent } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 
 import type { ChatFailure, ChatMessage, TokenUsage } from "./chat.ts";
-import { sendChatMessage } from "./chat.ts";
+import { isChatCommand, sendChatMessage } from "./chat.ts";
 
 import "./App.css";
 
@@ -34,7 +34,16 @@ interface Conversation {
 }
 
 const emptyConversation: Conversation = { id: null, messages: [] };
+const helpStorageKey = "nexo-ai:conversation-state-help-seen";
 const tokenCount = new Intl.NumberFormat("es-PE");
+
+const hasSeenHelp = () => {
+  try {
+    return window.localStorage.getItem(helpStorageKey) === "true";
+  } catch {
+    return false;
+  }
+};
 
 const TokenUsageDetails = ({ usage }: { usage: TokenUsage }) => (
   <details className="token-usage">
@@ -88,21 +97,46 @@ const App = () => {
   const [conversation, setConversation] = useState(emptyConversation);
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<DisplayMessage | null>(null);
+  const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<ChatFailure | null>(null);
+  const [notice, setNotice] = useState("");
   const composer = useRef<HTMLTextAreaElement>(null);
+  const helpButton = useRef<HTMLButtonElement>(null);
+  const helpDialog = useRef<HTMLDialogElement>(null);
+  const openedHelpManually = useRef(false);
   const thread = useRef<HTMLElement>(null);
   const threadContent = useRef<HTMLDivElement>(null);
   const followThread = useRef(true);
+  const scrollToHistoryStart = useRef(false);
   const nextMessageId = useRef(0);
   const sending = useRef(false);
 
   const isPending = pending !== null;
+  const isBusy = isPending || isCommandPending;
   const isExpired = error?.status === "expired";
   const hasMessages = conversation.messages.length > 0 || isPending;
-  const canSend = draft.trim().length > 0 && !isPending && !isExpired;
+  const canSend = draft.trim().length > 0 && !isBusy && !isExpired;
   const visibleMessages = pending
     ? [...conversation.messages, pending]
     : conversation.messages;
+
+  useEffect(() => {
+    const dialog = helpDialog.current;
+    if (dialog && !dialog.open && !hasSeenHelp()) {
+      dialog.showModal();
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!scrollToHistoryStart.current) {
+      return;
+    }
+
+    scrollToHistoryStart.current = false;
+    if (conversation.messages.length > 0 && thread.current) {
+      thread.current.scrollTop = 0;
+    }
+  }, [conversation.messages]);
 
   useEffect(() => {
     const container = thread.current;
@@ -130,8 +164,25 @@ const App = () => {
     composer.current?.focus({ preventScroll: true });
   };
 
+  const openHelp = () => {
+    openedHelpManually.current = true;
+    helpDialog.current?.showModal();
+  };
+
+  const closeHelp = () => {
+    const target = openedHelpManually.current ? helpButton : composer;
+    target.current?.focus({ preventScroll: true });
+
+    try {
+      window.localStorage.setItem(helpStorageKey, "true");
+    } catch {
+      // Dismissal still works when browser storage is unavailable.
+    }
+  };
+
   const updateDraft = (value: string) => {
     setDraft(value);
+    setNotice("");
     if (!isExpired) {
       setError(null);
     }
@@ -146,7 +197,75 @@ const App = () => {
     setConversation(emptyConversation);
     setDraft(isExpired ? draft : "");
     setError(null);
+    setNotice("");
     focusComposer();
+  };
+
+  const displayMessages = (
+    messages: ChatMessage[],
+    previousMessages: DisplayMessage[],
+    usage: TokenUsage | null
+  ) =>
+    messages.map((message, position) => {
+      const previous = previousMessages[position];
+      if (
+        previous?.role === message.role &&
+        previous.content === message.content
+      ) {
+        return previous;
+      }
+
+      nextMessageId.current += 1;
+      return {
+        ...message,
+        id: nextMessageId.current,
+        usage:
+          position === messages.length - 1 && message.role === "assistant"
+            ? usage
+            : null,
+      };
+    });
+
+  const runCommand = async (command: "/reset" | "/history") => {
+    if (!conversation.id) {
+      setDraft("");
+      setNotice(
+        command === "/history"
+          ? "Todavía no hay historial."
+          : "La conversación ya está vacía."
+      );
+      return;
+    }
+
+    sending.current = true;
+    setIsCommandPending(true);
+    const result = await sendChatMessage(command, conversation.id);
+    sending.current = false;
+    setIsCommandPending(false);
+
+    if (result.status !== "success") {
+      setError(result);
+      return;
+    }
+
+    setDraft("");
+    if (command === "/reset") {
+      followThread.current = true;
+      setConversation({ id: result.id, messages: [] });
+      setNotice("Se reinició el contexto.");
+      focusComposer();
+      return;
+    }
+
+    followThread.current = false;
+    scrollToHistoryStart.current = true;
+    setConversation({
+      id: result.id,
+      messages: displayMessages(result.messages, conversation.messages, null),
+    });
+    if (result.messages.length === 0) {
+      setNotice("Todavía no hay historial.");
+    }
   };
 
   const submit = async (event: SubmitEvent<HTMLFormElement>) => {
@@ -156,13 +275,11 @@ const App = () => {
     }
 
     const prompt = draft.trim();
-    if (prompt === "/reset" || prompt === "/history") {
-      setError({
-        message:
-          "Escribe una pregunta o usa «Nuevo chat» para volver a empezar.",
-        status: "failed",
-      });
-      focusComposer();
+    focusComposer();
+    setError(null);
+    setNotice("");
+    if (isChatCommand(prompt)) {
+      await runCommand(prompt);
       return;
     }
 
@@ -176,9 +293,7 @@ const App = () => {
       usage: null,
     };
     const expectedMessages = [...conversation.messages, outgoing];
-    focusComposer();
     setDraft("");
-    setError(null);
     setPending(outgoing);
 
     const result = await sendChatMessage(prompt, conversation.id);
@@ -190,28 +305,13 @@ const App = () => {
       return;
     }
 
-    const replyPosition = result.messages.length - 1;
     setConversation({
       id: result.id,
-      messages: result.messages.map((message, position) => {
-        const previous = expectedMessages[position];
-        if (
-          previous?.role === message.role &&
-          previous.content === message.content
-        ) {
-          return previous;
-        }
-
-        nextMessageId.current += 1;
-        return {
-          ...message,
-          id: nextMessageId.current,
-          usage:
-            position === replyPosition && message.role === "assistant"
-              ? result.usage
-              : null,
-        };
-      }),
+      messages: displayMessages(
+        result.messages,
+        expectedMessages,
+        result.usage
+      ),
     });
   };
 
@@ -224,16 +324,63 @@ const App = () => {
           </span>
           <span>Nexo AI</span>
         </div>
-        <button
-          className="new-chat pressable"
-          disabled={isPending}
-          onClick={startNewChat}
-          type="button"
-        >
-          <span aria-hidden="true">+</span>
-          Nuevo chat
-        </button>
+        <div className="header-actions">
+          <button
+            aria-haspopup="dialog"
+            aria-label="Ayuda"
+            className="help-button pressable"
+            onClick={openHelp}
+            ref={helpButton}
+            type="button"
+          >
+            <span aria-hidden="true">?</span>
+          </button>
+          <button
+            className="new-chat pressable"
+            disabled={isBusy}
+            onClick={startNewChat}
+            type="button"
+          >
+            <span aria-hidden="true">+</span>
+            Nuevo chat
+          </button>
+        </div>
       </header>
+
+      <dialog
+        aria-describedby="help-description"
+        aria-labelledby="help-title"
+        className="help-dialog"
+        onClose={closeHelp}
+        ref={helpDialog}
+      >
+        <h2 id="help-title">Conversation State</h2>
+        <p id="help-description">
+          Este proyecto se construyó para entender cómo se mantiene el contexto
+          de una conversación. El objetivo es que el modelo recuerde lo que se
+          habló antes y pueda usarlo para responder en interacciones
+          posteriores.
+        </p>
+        <dl className="help-commands">
+          <div>
+            <dt>
+              <code>/reset</code>
+            </dt>
+            <dd>Reinicia el contexto de la conversación.</dd>
+          </div>
+          <div>
+            <dt>
+              <code>/history</code>
+            </dt>
+            <dd>Muestra toda la conversación con el modelo.</dd>
+          </div>
+        </dl>
+        <form className="help-actions" method="dialog">
+          <button className="help-dismiss pressable" type="submit">
+            Entendido
+          </button>
+        </form>
+      </dialog>
 
       <main
         className={hasMessages ? "chat-main chat-main--active" : "chat-main"}
@@ -296,8 +443,8 @@ const App = () => {
         )}
 
         <div className="composer-area column">
-          <output className="sr-only">
-            {isPending ? "Nexo está respondiendo." : ""}
+          <output className={notice ? "composer-notice" : "sr-only"}>
+            {isPending ? "Nexo está respondiendo." : notice}
           </output>
           {error && (
             <p className="composer-error" role="alert">
@@ -317,7 +464,7 @@ const App = () => {
               onChange={(event) => updateDraft(event.currentTarget.value)}
               onKeyDown={handleComposerKeyDown}
               placeholder="Escribe tu mensaje…"
-              readOnly={isPending}
+              readOnly={isBusy}
               ref={composer}
               rows={2}
               value={draft}
@@ -342,6 +489,7 @@ const App = () => {
               <li key={suggestion.label}>
                 <button
                   className="suggestion pressable"
+                  disabled={isBusy}
                   onClick={() => {
                     updateDraft(suggestion.prompt);
                     focusComposer();
