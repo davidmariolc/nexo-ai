@@ -23,6 +23,8 @@ Necesitas Python 3.12, `uv`, Node.js, `pnpm` y una clave de Groq.
    FRONTEND_URL=http://127.0.0.1:5173
    ```
 
+   `FRONTEND_URL` define el origen permitido por CORS. Debe coincidir con el protocolo, el dominio y el puerto que usa el navegador para abrir la interfaz.
+
 2. Desde la raíz del repositorio, inicia la API en una terminal.
 
    ```sh
