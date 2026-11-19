@@ -43,4 +43,8 @@ Necesitas Python 3.12, `uv`, Node.js, `pnpm` y una clave de Groq.
 
 Abre [Nexo AI](http://127.0.0.1:5173/). Vite reenvía las solicitudes de `/api/v1` a FastAPI en el puerto `5001`.
 
+## Desplegar el frontend en Vercel
+
+Importa el repositorio como un proyecto Vite con `frontend` como **Root Directory**. El [rewrite de Vercel](frontend/vercel.json) reenvía las solicitudes desde `/api/v1` a la API de producción. Si cambia el dominio de FastAPI, actualiza el `destination` del rewrite.
+
 Para más detalles, consulta la documentación del [frontend](frontend/README.md) y de la [API](fastapi/README.md).
