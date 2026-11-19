@@ -33,6 +33,11 @@ interface Conversation {
   messages: DisplayMessage[];
 }
 
+interface PendingTurn {
+  user: DisplayMessage;
+  reply: DisplayMessage;
+}
+
 const emptyConversation: Conversation = { id: null, messages: [] };
 const helpStorageKey = "nexo-ai:conversation-state-help-seen";
 const tokenCount = new Intl.NumberFormat("es-PE");
@@ -96,7 +101,7 @@ const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
 const App = () => {
   const [conversation, setConversation] = useState(emptyConversation);
   const [draft, setDraft] = useState("");
-  const [pending, setPending] = useState<DisplayMessage | null>(null);
+  const [pending, setPending] = useState<PendingTurn | null>(null);
   const [isCommandPending, setIsCommandPending] = useState(false);
   const [error, setError] = useState<ChatFailure | null>(null);
   const [notice, setNotice] = useState("");
@@ -116,8 +121,13 @@ const App = () => {
   const isExpired = error?.status === "expired";
   const hasMessages = conversation.messages.length > 0 || isPending;
   const canSend = draft.trim().length > 0 && !isBusy && !isExpired;
+  const hasPartialReply = Boolean(pending?.reply.content.trim());
   const visibleMessages = pending
-    ? [...conversation.messages, pending]
+    ? [
+        ...conversation.messages,
+        pending.user,
+        ...(hasPartialReply ? [pending.reply] : []),
+      ]
     : conversation.messages;
 
   useEffect(() => {
@@ -292,11 +302,35 @@ const App = () => {
       role: "user",
       usage: null,
     };
+    nextMessageId.current += 1;
+    const incoming: DisplayMessage = {
+      content: "",
+      id: nextMessageId.current,
+      role: "assistant",
+      usage: null,
+    };
     const expectedMessages = [...conversation.messages, outgoing];
     setDraft("");
-    setPending(outgoing);
+    setPending({ reply: incoming, user: outgoing });
 
-    const result = await sendChatMessage(prompt, conversation.id);
+    let streamedText = "";
+    let frame: number | null = null;
+    const result = await sendChatMessage(prompt, conversation.id, (text) => {
+      streamedText += text;
+      if (frame === null) {
+        frame = window.requestAnimationFrame(() => {
+          frame = null;
+          const content = streamedText;
+          setPending(
+            (turn) => turn && { ...turn, reply: { ...turn.reply, content } }
+          );
+        });
+      }
+    });
+
+    if (frame !== null) {
+      window.cancelAnimationFrame(frame);
+    }
     sending.current = false;
     setPending(null);
     if (result.status !== "success") {
@@ -407,6 +441,7 @@ const App = () => {
                 {visibleMessages.map((message) => (
                   <li
                     className={`message message--${message.role}`}
+                    inert={message.id === pending?.reply.id}
                     key={message.id}
                   >
                     {message.role === "user" ? (
@@ -419,8 +454,9 @@ const App = () => {
                         <span className="message-author">Nexo</span>
                         <div className="message-content">
                           <Markdown disallowedElements={["img"]} skipHtml>
-                            {message.content.trim() ||
-                              "Nexo devolvió una respuesta vacía."}
+                            {message.content.trim()
+                              ? message.content
+                              : "Nexo devolvió una respuesta vacía."}
                           </Markdown>
                         </div>
                         {message.usage && (
@@ -431,7 +467,7 @@ const App = () => {
                   </li>
                 ))}
               </ol>
-              {isPending && (
+              {isPending && !hasPartialReply && (
                 <p aria-hidden="true" className="waiting">
                   Nexo está respondiendo…
                 </p>

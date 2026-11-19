@@ -54,7 +54,15 @@ vercel dev
 | `GET` | `/` | API name and version as JSON |
 | `GET` | `/api/v1/items/` | List sample items |
 | `GET` | `/api/v1/items/{item_id}` | Get item by ID |
+| `POST` | `/api/v1/chat/` | Generate a reply or manage a conversation using JSON |
+| `POST` | `/api/v1/chat/stream` | Generate a reply using server-sent events |
 | `GET` | `/docs` | Interactive API docs (Swagger UI) |
+
+The streaming route accepts `prompt` and an optional `conversation_id`. Each
+`data:` frame contains JSON with a `type`. The `delta` frames contain text to
+append. The final `done` frame contains the conversation ID, full message list,
+and token usage. An `error` frame contains a message if generation fails after
+the stream opens. Only completed turns are saved to the conversation.
 
 ## Deploying to Vercel
 

@@ -71,57 +71,175 @@ const unexpectedReply: ChatFailure = {
   status: "failed",
 };
 
-export const sendChatMessage = async (
-  prompt: string,
-  conversationId: string | null
+const readChatResponse = (
+  data: unknown,
+  minimumMessages = 2
+): ChatSuccess | ChatFailure =>
+  isChatResponse(data, minimumMessages)
+    ? {
+        id: data.conversation_id,
+        messages: data.messages,
+        status: "success",
+        usage: isTokenUsage(data.usage) ? data.usage : null,
+      }
+    : unexpectedReply;
+
+const isMissingStreamRoute = async (response: Response): Promise<boolean> => {
+  if (response.status !== 404) {
+    return false;
+  }
+
+  const data: unknown = await response.json().catch(() => null);
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    "detail" in data &&
+    data.detail === "Not Found"
+  );
+};
+
+const readChatStream = async (
+  body: ReadableStream<Uint8Array>,
+  onDelta: (text: string) => void,
+  refreshTimeout: () => void
 ): Promise<ChatSuccess | ChatFailure> => {
-  const isCommand = isChatCommand(prompt);
-  let response: Response;
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
 
   try {
-    response = await fetch("/api/v1/chat/", {
-      body: JSON.stringify({ conversation_id: conversationId, prompt }),
-      headers: { "Content-Type": "application/json" },
-      method: "POST",
-      signal: AbortSignal.timeout(40_000),
-    });
+    while (true) {
+      // oxlint-disable-next-line eslint/no-await-in-loop -- Stream chunks must be read in order.
+      const { done, value } = await reader.read();
+      if (done) {
+        return {
+          message: "La respuesta se interrumpió. Intenta enviar de nuevo.",
+          status: "failed",
+        };
+      }
+
+      refreshTimeout();
+      buffer += decoder.decode(value, { stream: true });
+      const frames = buffer.split(/\r?\n\r?\n/u);
+      buffer = frames.pop() ?? "";
+
+      for (const frame of frames) {
+        if (!frame.startsWith("data: ")) {
+          continue;
+        }
+
+        let event: unknown;
+        try {
+          event = JSON.parse(frame.slice(6));
+        } catch {
+          return unexpectedReply;
+        }
+
+        if (typeof event !== "object" || event === null || !("type" in event)) {
+          return unexpectedReply;
+        }
+
+        if (
+          event.type === "delta" &&
+          "text" in event &&
+          typeof event.text === "string"
+        ) {
+          onDelta(event.text);
+          continue;
+        }
+
+        if (event.type === "done") {
+          return readChatResponse(event);
+        }
+
+        if (
+          event.type === "error" &&
+          "message" in event &&
+          typeof event.message === "string"
+        ) {
+          return { message: event.message, status: "failed" };
+        }
+
+        return unexpectedReply;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+};
+
+export const sendChatMessage = async (
+  prompt: string,
+  conversationId: string | null,
+  onDelta?: (text: string) => void
+): Promise<ChatSuccess | ChatFailure> => {
+  const isCommand = isChatCommand(prompt);
+  const controller = new AbortController();
+  let timeout: number | undefined;
+  const refreshTimeout = () => {
+    window.clearTimeout(timeout);
+    timeout = window.setTimeout(() => controller.abort(), 45_000);
+  };
+  const request = {
+    body: JSON.stringify({ conversation_id: conversationId, prompt }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+    signal: controller.signal,
+  };
+
+  refreshTimeout();
+  try {
+    let response = isCommand
+      ? await fetch("/api/v1/chat/", request)
+      : await fetch("/api/v1/chat/stream", {
+          ...request,
+          headers: { ...request.headers, Accept: "text/event-stream" },
+        });
+
+    if (!isCommand && (await isMissingStreamRoute(response))) {
+      refreshTimeout();
+      response = await fetch("/api/v1/chat/", request);
+    }
+
+    if (response.status === 404 && conversationId) {
+      return {
+        message:
+          "Esta conversación expiró. Selecciona «Nuevo chat» para continuar.",
+        status: "expired",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        message: isCommand
+          ? "No se pudo ejecutar el comando. Intenta enviarlo de nuevo."
+          : "Nexo no pudo responder. Intenta enviar de nuevo.",
+        status: "failed",
+      };
+    }
+
+    const contentType = response.headers.get("Content-Type");
+    if (contentType?.startsWith("application/json")) {
+      const data: unknown = await response.json().catch(() => null);
+      return readChatResponse(data, isCommand ? 0 : 2);
+    }
+
+    if (
+      onDelta &&
+      response.body &&
+      contentType?.startsWith("text/event-stream")
+    ) {
+      return await readChatStream(response.body, onDelta, refreshTimeout);
+    }
+
+    return unexpectedReply;
   } catch {
     return {
       message: "No se pudo conectar con Nexo. Intenta enviar de nuevo.",
       status: "failed",
     };
+  } finally {
+    window.clearTimeout(timeout);
+    controller.abort();
   }
-
-  if (response.status === 404 && conversationId) {
-    return {
-      message:
-        "Esta conversación expiró. Selecciona «Nuevo chat» para continuar.",
-      status: "expired",
-    };
-  }
-
-  if (!response.ok) {
-    return {
-      message: isCommand
-        ? "No se pudo ejecutar el comando. Intenta enviarlo de nuevo."
-        : "Nexo no pudo responder. Intenta enviar de nuevo.",
-      status: "failed",
-    };
-  }
-
-  try {
-    const data: unknown = await response.json();
-    if (isChatResponse(data, isCommand ? 0 : 2)) {
-      return {
-        id: data.conversation_id,
-        messages: data.messages,
-        status: "success",
-        usage: isTokenUsage(data.usage) ? data.usage : null,
-      };
-    }
-  } catch {
-    return unexpectedReply;
-  }
-
-  return unexpectedReply;
 };
